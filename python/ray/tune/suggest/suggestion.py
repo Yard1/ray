@@ -321,6 +321,10 @@ class ConcurrencyLimiter(Searcher):
             searcher.
         batch (bool): Whether to wait for all concurrent samples
             to finish before updating the underlying searcher.
+        trials_before_limiting (int): Wait that many trials before limiting
+            concurrency. Useful for algorithms that begin optimization
+            by generating random samples - set wait_trials to the same
+            value as the number of them for best results.
 
     Example:
 
@@ -335,11 +339,16 @@ class ConcurrencyLimiter(Searcher):
     def __init__(self,
                  searcher: Searcher,
                  max_concurrent: int,
-                 batch: bool = False):
+                 batch: bool = False,
+                 trials_before_limiting: int = 0):
         assert type(max_concurrent) is int and max_concurrent > 0
+        assert type(
+            trials_before_limiting) is int and trials_before_limiting >= 0
         self.searcher = searcher
         self.max_concurrent = max_concurrent
         self.batch = batch
+        self.trials_before_limiting = trials_before_limiting
+        self.trials_finished = 0
         self.live_trials = set()
         self.cached_results = {}
         super(ConcurrencyLimiter, self).__init__(
@@ -348,7 +357,8 @@ class ConcurrencyLimiter(Searcher):
     def suggest(self, trial_id: str) -> Optional[Dict]:
         assert trial_id not in self.live_trials, (
             f"Trial ID {trial_id} must be unique: already found in set.")
-        if len(self.live_trials) >= self.max_concurrent:
+        if self.trials_finished >= self.trials_before_limiting and len(
+                self.live_trials) >= self.max_concurrent:
             logger.debug(
                 f"Not providing a suggestion for {trial_id} due to "
                 "concurrency limit: %s/%s.", len(self.live_trials),
@@ -375,6 +385,7 @@ class ConcurrencyLimiter(Searcher):
                     self.searcher.on_trial_complete(
                         trial_id, result=result, error=error)
                     self.live_trials.remove(trial_id)
+                    self.trials_finished += 1
                 self.cached_results = {}
             else:
                 return
@@ -382,6 +393,7 @@ class ConcurrencyLimiter(Searcher):
             self.searcher.on_trial_complete(
                 trial_id, result=result, error=error)
             self.live_trials.remove(trial_id)
+            self.trials_finished += 1
 
     def get_state(self) -> Dict:
         state = self.__dict__.copy()
